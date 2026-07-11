@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.env
+dist/
+
+# .pi-agent-dir/ is PI_CODING_AGENT_DIR for this repo (see docs/openrouter-free-model.md).
+# Only settings.json/models.json are checked in; everything else pi generates
+# (sessions, auth.json, tmp/, ...) is local machine state.
+.pi-agent-dir/*
+!.pi-agent-dir/settings.json
+!.pi-agent-dir/models.json

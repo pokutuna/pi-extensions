@@ -1,0 +1,25 @@
+{
+  "name": "pi-extensions",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Monorepo for pokutuna's pi extension packages.",
+  "workspaces": [
+    "extensions/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "format": "oxfmt .",
+    "lint": "oxlint .",
+    "build": "npm --workspaces run build --if-present",
+    "typecheck": "npm --workspaces run typecheck",
+    "test": "npm --workspaces run test --if-present",
+    "check": "npm run lint && npm run build && npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.3",
+    "@types/node": "^24.0.0",
+    "oxfmt": "^0.58.0",
+    "oxlint": "^1.73.0",
+    "typescript": "^6.0.3"
+  }
+}

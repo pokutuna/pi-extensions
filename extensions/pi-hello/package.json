@@ -1,0 +1,39 @@
+{
+  "name": "@pokutuna/pi-hello",
+  "version": "0.0.1",
+  "private": false,
+  "description": "Pi extension that adds a /hello command.",
+  "keywords": [
+    "hello",
+    "pi",
+    "pi-extension",
+    "pi-package"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pokutuna/pi-extensions",
+    "directory": "extensions/pi-hello"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "./dist/hello.mjs",
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.3",
+    "tsdown": "^0.22.4",
+    "typescript": "^6.0.3"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/hello.mjs"
+    ]
+  }
+}
