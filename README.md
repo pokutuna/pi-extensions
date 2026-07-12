@@ -6,9 +6,10 @@ See [docs/extensions.md](docs/extensions.md) for notes on how pi extensions work
 
 ## Packages
 
-| Package                                      | Description             |
-| -------------------------------------------- | ----------------------- |
-| [`extensions/pi-hello`](extensions/pi-hello) | Adds a `/hello` command |
+| Package                                                    | Description                       |
+| ---------------------------------------------------------- | --------------------------------- |
+| [`extensions/pi-hello`](extensions/pi-hello)               | Adds a `/hello` command           |
+| [`extensions/pi-google-genai`](extensions/pi-google-genai) | Adds Google GenAI grounding tools |
 
 ## Development
 
