@@ -10,8 +10,10 @@ env:
 	sed 's|OPENROUTER_API_KEY_OP_REF|$(OPENROUTER_API_KEY_OP_REF)|' .env.template \
 		| op inject --account=$(OP_ACCOUNT) -o .env
 
-# Run pi with .env loaded, without polluting the calling shell.
-# Usage: make pi ARGS="-e ./extensions/pi-hello --no-session"
+# Run pi with .env loaded and every ./extensions/* package enabled, without
+# polluting the calling shell. Builds first since pi.extensions point at dist/.
+# Usage: make pi ARGS="--no-session"
 .PHONY: pi
 pi:
-	set -a && . ./.env && set +a && pi $(ARGS)
+	npm run build
+	set -a && . ./.env && set +a && pi $(foreach d,$(wildcard extensions/*/),-e ./$(d)) $(ARGS)
