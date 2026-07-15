@@ -2,7 +2,7 @@
 
 Monorepo for pokutuna's [pi](https://pi.dev) extension packages.
 
-See [docs/extensions.md](docs/extensions.md) for notes on how pi extensions work and how this repo is structured.
+See [docs/extensions.md](docs/extensions.md) for notes on how pi extensions work and how this repo is structured, and [docs/packages.md](docs/packages.md) for how packages are distributed, installed, and loaded.
 
 ## Packages
 
