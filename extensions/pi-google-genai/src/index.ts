@@ -8,6 +8,7 @@ import {
   resolveAuth,
   type LoadedConfig,
 } from "./config.ts";
+import { cancelBackgroundPolls } from "./deep-research.ts";
 import { cleanupRawResponseDirectory } from "./format.ts";
 import {
   createDeepResearchTool,
@@ -40,6 +41,7 @@ export default function googleGenai(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     ctx.ui.setStatus(STATUS_KEY, undefined);
+    cancelBackgroundPolls();
     await cleanupRawResponseDirectory();
   });
 }

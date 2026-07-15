@@ -5,11 +5,18 @@ import { join } from "node:path";
 export const DEFAULT_MODEL = "gemini-3.5-flash";
 export const DEFAULT_LOCATION = "global";
 export const DEFAULT_TIMEOUT_MS = 60_000;
-export const MAX_TIMEOUT_MS = 2_147_483_647;
+export const MAX_TIMEOUT_MS = 600_000;
 
 const CONFIG_FILE_NAME = "google-genai.json";
 const AUTH_MODES = ["api-key", "vertex-ai"] as const;
-const KNOWN_KEYS = ["auth", "apiKey", "project", "location", "model", "timeoutMs"];
+const KNOWN_KEYS = [
+  "auth",
+  "apiKey",
+  "project",
+  "location",
+  "model",
+  "timeoutMs",
+];
 
 export type AuthMode = (typeof AUTH_MODES)[number];
 
@@ -48,10 +55,15 @@ export type ResolvedAuth =
 type Env = Record<string, string | undefined>;
 
 export function configPath(env: Env = process.env): string {
-  return join(env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), CONFIG_FILE_NAME);
+  return join(
+    env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"),
+    CONFIG_FILE_NAME,
+  );
 }
 
-export async function loadConfig(env: Env = process.env): Promise<LoadedConfig> {
+export async function loadConfig(
+  env: Env = process.env,
+): Promise<LoadedConfig> {
   const path = configPath(env);
   const warnings: string[] = [];
   let raw: unknown;
@@ -67,7 +79,9 @@ export async function loadConfig(env: Env = process.env): Promise<LoadedConfig> 
   }
   const configLoaded = isObject(raw);
   if (raw !== undefined && !configLoaded) {
-    warnings.push(`${CONFIG_FILE_NAME} must contain a JSON object; ignoring config.`);
+    warnings.push(
+      `${CONFIG_FILE_NAME} must contain a JSON object; ignoring config.`,
+    );
   }
   const normalized = normalizeConfig(configLoaded ? raw : undefined);
   return {
@@ -94,7 +108,10 @@ export function normalizeConfig(value: unknown): {
 
   let auth: AuthMode | undefined;
   if (raw.auth !== undefined) {
-    if (typeof raw.auth === "string" && (AUTH_MODES as readonly string[]).includes(raw.auth)) {
+    if (
+      typeof raw.auth === "string" &&
+      (AUTH_MODES as readonly string[]).includes(raw.auth)
+    ) {
       auth = raw.auth as AuthMode;
     } else {
       warnings.push(
@@ -130,7 +147,10 @@ export function normalizeConfig(value: unknown): {
 
 export function isValidTimeoutMs(value: unknown): value is number {
   return (
-    typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_TIMEOUT_MS
   );
 }
 
@@ -151,7 +171,8 @@ export async function resolveAuth(
   registry?: ApiKeyRegistry,
 ): Promise<ResolvedAuth> {
   const backend =
-    config.auth ?? (isTruthyEnv(env.GOOGLE_GENAI_USE_VERTEXAI) ? "vertex-ai" : undefined);
+    config.auth ??
+    (isTruthyEnv(env.GOOGLE_GENAI_USE_VERTEXAI) ? "vertex-ai" : undefined);
 
   if (backend === "api-key") {
     return resolveApiKeyAuth(config, env, registry, true);
@@ -238,7 +259,11 @@ async function resolveApiKeyAuth(
   );
 }
 
-function resolveVertexAuth(config: GoogleGenaiConfig, env: Env, required: true): ResolvedAuth;
+function resolveVertexAuth(
+  config: GoogleGenaiConfig,
+  env: Env,
+  required: true,
+): ResolvedAuth;
 function resolveVertexAuth(
   config: GoogleGenaiConfig,
   env: Env,
@@ -258,8 +283,11 @@ function resolveVertexAuth(
         "Application Default Credentials are available (`gcloud auth application-default login`).",
     );
   }
-  const projectSource = config.project ? "config project" : "GOOGLE_CLOUD_PROJECT";
-  const location = config.location ?? env.GOOGLE_CLOUD_LOCATION ?? DEFAULT_LOCATION;
+  const projectSource = config.project
+    ? "config project"
+    : "GOOGLE_CLOUD_PROJECT";
+  const location =
+    config.location ?? env.GOOGLE_CLOUD_LOCATION ?? DEFAULT_LOCATION;
   const locationSource = config.location
     ? "config location"
     : env.GOOGLE_CLOUD_LOCATION
@@ -287,10 +315,16 @@ function isTruthyEnv(value: string | undefined): boolean {
   return normalized !== "" && !["0", "false", "no", "off"].includes(normalized);
 }
 
-function normalizeString(value: unknown, field: string, warnings: string[]): string | undefined {
+function normalizeString(
+  value: unknown,
+  field: string,
+  warnings: string[],
+): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "string" && value.trim()) return value.trim();
-  warnings.push(`${CONFIG_FILE_NAME}: ${field} must be a non-empty string; ignoring value.`);
+  warnings.push(
+    `${CONFIG_FILE_NAME}: ${field} must be a non-empty string; ignoring value.`,
+  );
   return undefined;
 }
 

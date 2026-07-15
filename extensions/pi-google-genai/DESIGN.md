@@ -111,6 +111,13 @@ no single tool call can block for that long. Instead:
   true, deliverAs: "nextTurn" })`. This requires capturing `pi` at extension
   registration time and threading it into the tool (`createDeepResearchTool(pi)`),
   since `pi` is not part of a tool's `execute()` arguments.
+- **Bounds on the poll**: the loop stops — and says so via `pi.sendMessage` —
+  after `MAX_CONSECUTIVE_ERRORS` (10) failed reads in a row, or once
+  `MAX_POLL_DURATION_MS` (2h) has elapsed. Both are escape hatches for an
+  interaction that can never resolve (deleted id, revoked credentials), not
+  caps on normal runs, which finish in minutes. A successful read resets the
+  error counter. `session_shutdown` calls `cancelBackgroundPolls()` to clear
+  any pending timers.
 - **Checking a run** (`interactionId` given): a single non-blocking
   `ai.interactions.get(id)` call, for on-demand status checks; this path does
   not start another background poll (only `startDeepResearch` does).
@@ -162,6 +169,10 @@ never hard failures at load time.
 | `location`  | `global`           |
 | `timeoutMs` | `60000`            |
 
+`timeoutMs` accepts an integer from 1 to `MAX_TIMEOUT_MS` (600000, i.e. 10
+minutes) — a bound on what a single grounded call can plausibly need, not on
+`deep_research`, which is not a blocking call and has its own poll bounds.
+
 ### Resolution precedence
 
 For every setting: **config file > environment variables > pi auth registry >
@@ -178,8 +189,12 @@ already uses:
 
 ## Authentication
 
-Resolution runs per tool call (cheap; the client is memoized on the resolved
-settings) and follows this algorithm:
+Resolution runs per tool call and follows this algorithm. The config file is
+re-read every time — deliberately, so edits to `google-genai.json` take effect
+on the next tool call without restarting pi. It costs ~0.02ms against a
+multi-second API call, so there is nothing to gain by caching it. Only the
+`GoogleGenAI` client is memoized, keyed on the resolved auth (the api-key
+backend is keyed by a SHA-256 digest, so the memo entry holds no key material):
 
 1. **Backend selection**
    1. `config.auth` if set.

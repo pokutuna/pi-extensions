@@ -12,6 +12,13 @@ import {
 
 const SOURCE_LIMIT = 10;
 
+/**
+ * Floor on the answer's byte budget when sources plus footer are themselves
+ * large enough to crowd out the whole budget. Without it the answer could be
+ * cut to nothing while the footer still claims content was shown.
+ */
+const MIN_ANSWER_BYTES = 512;
+
 export interface GenaiSource {
   type: "web" | "maps" | "url_context";
   title?: string;
@@ -70,41 +77,67 @@ export async function formatToolResult(
 ): Promise<ToolResultContent> {
   const outputText = (response.text ?? "").trim() || "No response received.";
   const sources = extractSources(response);
-  const text = joinBlocks([outputText, formatSourcesSection(sources)]);
-  const truncation = truncateHead(text, {
+  const sourcesSection = formatSourcesSection(sources);
+  const full = joinBlocks([outputText, sourcesSection]);
+  const fits = truncateHead(full, {
     maxLines: DEFAULT_MAX_LINES,
     maxBytes: DEFAULT_MAX_BYTES,
   });
-  const details: GenaiDetails = {
-    model,
-    sources,
-    truncated: truncation.truncated,
-  };
 
-  if (!truncation.truncated) {
-    return { content: [{ type: "text", text: truncation.content }], details };
+  if (!fits.truncated) {
+    return {
+      content: [{ type: "text", text: fits.content }],
+      details: { model, sources, truncated: false },
+    };
   }
 
+  // Over budget. The answer is the point of the result, so it gets whatever
+  // room is left after the sources and the footer, which are kept intact.
+  // The footer has to quote the final sizes, but those aren't known until the
+  // answer is cut — so budget against a placeholder of the same shape first,
+  // then re-render the footer with the real numbers.
   const fullResponsePath = await writeRawResponse(response);
-  details.fullResponsePath = fullResponsePath;
-  details.truncation = {
-    truncatedBy: truncation.truncatedBy,
-    totalLines: truncation.totalLines,
-    totalBytes: truncation.totalBytes,
-    outputLines: truncation.outputLines,
-    outputBytes: truncation.outputBytes,
-  };
-  const footer =
-    `[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines ` +
-    `(${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). ` +
+  const totalLines = fits.totalLines;
+  const totalBytes = fits.totalBytes;
+  const renderFooter = (shownLines: number, shownBytes: number) =>
+    `[Output truncated: showing ${shownLines} of ${totalLines} lines ` +
+    `(${formatSize(shownBytes)} of ${formatSize(totalBytes)}). ` +
     `Full response saved to: ${fullResponsePath}]`;
-  const suffix = joinBlocks([formatSourcesSection(sources), footer]);
-  const truncatedOutput = truncateHead(outputText, {
-    maxLines: Math.max(0, DEFAULT_MAX_LINES - countLines(suffix) - 1),
-    maxBytes: Math.max(0, DEFAULT_MAX_BYTES - Buffer.byteLength(suffix, "utf8") - 2),
+
+  const suffixFor = (footer: string) => joinBlocks([sourcesSection, footer]);
+  const budgetFor = (suffix: string) => ({
+    // joinBlocks inserts a blank line between the answer and the suffix:
+    // one extra line, two extra bytes.
+    maxLines: Math.max(1, DEFAULT_MAX_LINES - countLines(suffix) - 1),
+    maxBytes: Math.max(
+      MIN_ANSWER_BYTES,
+      DEFAULT_MAX_BYTES - Buffer.byteLength(suffix, "utf8") - 2,
+    ),
   });
-  const content = joinBlocks([truncatedOutput.content, suffix]);
-  return { content: [{ type: "text", text: content }], details };
+
+  const provisional = suffixFor(renderFooter(totalLines, totalBytes));
+  const answer = truncateHead(outputText, budgetFor(provisional));
+  const suffix = suffixFor(
+    renderFooter(answer.outputLines, answer.outputBytes),
+  );
+  const content = joinBlocks([answer.content, suffix]);
+
+  return {
+    content: [{ type: "text", text: content }],
+    details: {
+      model,
+      sources,
+      truncated: true,
+      fullResponsePath,
+      truncation: {
+        truncatedBy: fits.truncatedBy,
+        totalLines,
+        totalBytes,
+        outputLines: answer.outputLines,
+        outputBytes: answer.outputBytes,
+      },
+    },
+  };
 }
 
 /** Extract deduplicated sources from grounding and URL-context metadata. */
@@ -145,7 +178,8 @@ export function formatSourcesSection(sources: GenaiSource[]): string {
   if (sources.length === 0) return "";
   const visible = sources.slice(0, SOURCE_LIMIT);
   const lines = visible.map(
-    (source, index) => truncateLine(`${index + 1}. ${formatSource(source)}`).text,
+    (source, index) =>
+      truncateLine(`${index + 1}. ${formatSource(source)}`).text,
   );
   if (sources.length > SOURCE_LIMIT) {
     lines.push(`... and ${sources.length - SOURCE_LIMIT} more`);
@@ -163,7 +197,9 @@ function formatSource(source: GenaiSource): string {
 function addSource(sources: GenaiSource[], source: GenaiSource) {
   const key = `${source.type}\0${source.uri ?? ""}\0${source.title ?? ""}`;
   const exists = sources.some(
-    (existing) => `${existing.type}\0${existing.uri ?? ""}\0${existing.title ?? ""}` === key,
+    (existing) =>
+      `${existing.type}\0${existing.uri ?? ""}\0${existing.title ?? ""}` ===
+      key,
   );
   if (!exists) sources.push(source);
 }
