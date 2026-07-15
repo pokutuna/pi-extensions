@@ -1,0 +1,110 @@
+# Publish Package Workflow
+#
+# Publishes a single extension package to npm and creates a GitHub release when a
+# package-scoped version tag is pushed. This is a monorepo, so tags must name the
+# package: only the tagged package is published, never the whole workspace.
+#
+# Tag format: <dir-name>-v<semver>   e.g. pi-google-genai-v0.1.0
+#
+# Release steps:
+#   1. Decide the new version (Semantic Versioning: MAJOR.MINOR.PATCH)
+#
+#   2. Update extensions/<pkg>/CHANGELOG.md
+#      - Move items from [Unreleased] to a new version section
+#      - Add the release date (YYYY-MM-DD)
+#
+#   3. Bump the version and tag, e.g. for extensions/pi-google-genai:
+#      - npm version patch -w @pokutuna/pi-google-genai --no-git-tag-version
+#      - git add -A && git commit -m "release: pi-google-genai v0.1.0"
+#      - git tag pi-google-genai-v0.1.0
+#
+#   4. git push origin main --tags
+#
+# The workflow then verifies the tag against package.json, runs checks, builds, and
+# publishes with npm provenance.
+#
+# NOTE: The first publish of a package must be done manually (`npm publish -w <pkg>
+# --access public`). npm Trusted Publishing (OIDC) is configured per-package on
+# npmjs.com and cannot be set up for a package that does not exist yet. Configure it
+# there after the first release, then this workflow takes over.
+
+name: Publish Package
+
+on:
+  push:
+    tags:
+      - "*-v[0-9]+.[0-9]+.[0-9]+"
+      - "*-v[0-9]+.[0-9]+.[0-9]+-*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # for GitHub Release
+      id-token: write # for npm Trusted Publisher OIDC
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Parse tag into package directory and version
+        id: parse
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Split on the last "-v": everything before is the dir, after is the version.
+          DIR="${TAG%-v*}"
+          VERSION="${TAG##*-v}"
+
+          if [ ! -d "extensions/${DIR}" ]; then
+            echo "::error::Tag ${TAG} does not match a package: extensions/${DIR} not found"
+            exit 1
+          fi
+
+          NAME=$(jq -r .name "extensions/${DIR}/package.json")
+          MANIFEST_VERSION=$(jq -r .version "extensions/${DIR}/package.json")
+          IS_PRIVATE=$(jq -r '.private // false' "extensions/${DIR}/package.json")
+
+          if [ "${IS_PRIVATE}" = "true" ]; then
+            echo "::error::${NAME} is marked private and must not be published"
+            exit 1
+          fi
+
+          if [ "${MANIFEST_VERSION}" != "${VERSION}" ]; then
+            echo "::error::Tag says ${VERSION} but extensions/${DIR}/package.json says ${MANIFEST_VERSION}"
+            exit 1
+          fi
+
+          echo "dir=${DIR}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Publishing ${NAME}@${VERSION} from extensions/${DIR}"
+
+      - name: Verify CHANGELOG contains release version
+        run: |
+          CHANGELOG="extensions/${{ steps.parse.outputs.dir }}/CHANGELOG.md"
+          if ! grep -q "^## \[${{ steps.parse.outputs.version }}\]" "${CHANGELOG}"; then
+            echo "::error::${CHANGELOG} does not contain an entry for version ${{ steps.parse.outputs.version }}"
+            echo "Please update the CHANGELOG before releasing."
+            exit 1
+          fi
+          echo "Found CHANGELOG entry for version ${{ steps.parse.outputs.version }}"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+
+      - run: npm ci
+      - run: npm run check
+
+      # pi.extensions points at dist/, so the package must be built before publishing.
+      # prepublishOnly covers this too, but building explicitly fails more clearly.
+      - run: npm run build -w ${{ steps.parse.outputs.name }}
+
+      - run: npm publish -w ${{ steps.parse.outputs.name }} --provenance --access public
+
+      - run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${{ steps.parse.outputs.name }} v${{ steps.parse.outputs.version }}" \
+            --generate-notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
