@@ -87,7 +87,7 @@ jobs:
           fi
           echo "Found CHANGELOG entry for version ${{ steps.parse.outputs.version }}"
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v6.4.0
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
