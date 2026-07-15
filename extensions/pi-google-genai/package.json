@@ -1,8 +1,8 @@
 {
   "name": "@pokutuna/pi-google-genai",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": false,
-  "description": "Pi extension that adds Google GenAI grounding tools: google_search, google_maps, and url_context.",
+  "description": "Pi extension that adds Google GenAI grounding tools: google_search, google_maps, url_context, and deep_research.",
   "keywords": [
     "gemini",
     "genai",
@@ -19,6 +19,7 @@
     "url": "git+https://github.com/pokutuna/pi-extensions.git",
     "directory": "extensions/pi-google-genai"
   },
+  "homepage": "https://github.com/pokutuna/pi-extensions/tree/main/extensions/pi-google-genai#readme",
   "files": [
     "dist",
     "CHANGELOG.md",

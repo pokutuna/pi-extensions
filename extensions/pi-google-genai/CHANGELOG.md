@@ -7,12 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- Moved `typebox` from `dependencies` to `peerDependencies` (`"*"`). It is bundled by
-  the pi runtime and must not be installed separately by consumers.
-
-## [0.0.1] - 2026-07-15
+## [0.1.0] - 2026-07-16
 
 ### Added
 
