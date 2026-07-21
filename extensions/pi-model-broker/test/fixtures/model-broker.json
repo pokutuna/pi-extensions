@@ -1,0 +1,13 @@
+{
+  "providers": {
+    "openai": {
+      "upstreamBaseUrl": "https://api.openai.com/v1",
+      "headers": {
+        "Authorization": {
+          "env": "OPENAI_API_KEY",
+          "prefix": "Bearer "
+        }
+      }
+    }
+  }
+}

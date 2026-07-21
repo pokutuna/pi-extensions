@@ -1,0 +1,62 @@
+{
+  "name": "@pokutuna/pi-model-broker",
+  "version": "0.1.0",
+  "private": false,
+  "description": "A loopback model broker and provider-routing extension for pi.",
+  "keywords": [
+    "model-broker",
+    "pi",
+    "pi-extension",
+    "pi-package",
+    "proxy"
+  ],
+  "homepage": "https://github.com/pokutuna/pi-extensions/tree/main/extensions/pi-model-broker#readme",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pokutuna/pi-extensions.git",
+    "directory": "extensions/pi-model-broker"
+  },
+  "bin": {
+    "pi-model-broker": "./dist/cli.mjs"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./server": "./dist/server.mjs",
+    "./contract": "./dist/contract.mjs",
+    "./extension": "./dist/extension.mjs"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.3",
+    "@types/node": "^24.0.0",
+    "tsdown": "^0.22.4",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./dist/extension.mjs"
+    ]
+  }
+}
