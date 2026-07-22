@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   DEFAULT_LOCATION,
+  DEFAULT_LOOKUP_PI_CONFIG,
   DEFAULT_MODEL,
   DEFAULT_TIMEOUT_MS,
   describeAuth,
@@ -13,7 +14,15 @@ import {
 const emptyEnv = {};
 
 function registryWith(key: string | undefined): ApiKeyRegistry {
-  return { getApiKeyForProvider: async () => key };
+  return registryWithProviders({ google: key });
+}
+
+function registryWithProviders(
+  keys: Record<string, string | undefined>,
+): ApiKeyRegistry {
+  return {
+    getApiKeyForProvider: async (provider) => keys[provider],
+  };
 }
 
 test("normalizeConfig: defaults for empty input", () => {
@@ -21,6 +30,7 @@ test("normalizeConfig: defaults for empty input", () => {
   assert.equal(config.model, DEFAULT_MODEL);
   assert.equal(config.timeoutMs, DEFAULT_TIMEOUT_MS);
   assert.equal(config.auth, undefined);
+  assert.equal(config.lookupPiConfig, DEFAULT_LOOKUP_PI_CONFIG);
   assert.equal(config.apiKey, undefined);
   assert.deepEqual(warnings, []);
 });
@@ -28,12 +38,14 @@ test("normalizeConfig: defaults for empty input", () => {
 test("normalizeConfig: accepts valid fields", () => {
   const { config, warnings } = normalizeConfig({
     auth: "vertex-ai",
+    lookupPiConfig: true,
     project: "my-project",
     location: "us-central1",
     model: "gemini-x",
     timeoutMs: 1234,
   });
   assert.equal(config.auth, "vertex-ai");
+  assert.equal(config.lookupPiConfig, true);
   assert.equal(config.project, "my-project");
   assert.equal(config.location, "us-central1");
   assert.equal(config.model, "gemini-x");
@@ -50,13 +62,14 @@ test("normalizeConfig: warns on unknown fields", () => {
 test("normalizeConfig: warns and falls back on invalid values", () => {
   const { config, warnings } = normalizeConfig({
     auth: "bogus",
+    lookupPiConfig: "yes",
     model: 42,
     timeoutMs: -1,
   });
   assert.equal(config.auth, undefined);
   assert.equal(config.model, DEFAULT_MODEL);
   assert.equal(config.timeoutMs, DEFAULT_TIMEOUT_MS);
-  assert.equal(warnings.length, 3);
+  assert.equal(warnings.length, 4);
 });
 
 test("normalizeConfig: non-object input yields defaults", () => {
@@ -91,10 +104,92 @@ test("resolveAuth: GOOGLE_API_KEY used when GEMINI_API_KEY absent", async () => 
 });
 
 test("resolveAuth: falls back to pi auth registry", async () => {
-  const { config } = normalizeConfig({});
+  const { config } = normalizeConfig({ lookupPiConfig: true });
   const auth = await resolveAuth(config, emptyEnv, registryWith("registry-key"));
   assert.equal(auth.backend === "api-key" && auth.apiKey, "registry-key");
-  assert.equal(auth.backend === "api-key" && auth.source, "pi auth (/login google)");
+  assert.equal(auth.backend === "api-key" && auth.source, "pi provider google");
+});
+
+test("resolveAuth: current google provider uses pi google auth", async () => {
+  const { config } = normalizeConfig({ lookupPiConfig: true });
+  const auth = await resolveAuth(
+    config,
+    { GEMINI_API_KEY: "env-key" },
+    registryWithProviders({ google: "pi-key" }),
+    { currentProvider: "google" },
+  );
+  assert.deepEqual(auth, {
+    backend: "api-key",
+    apiKey: "pi-key",
+    source: "pi provider google",
+  });
+});
+
+test("resolveAuth: does not inspect pi providers by default", async () => {
+  const { config } = normalizeConfig({});
+  await assert.rejects(
+    () =>
+      resolveAuth(
+        config,
+        emptyEnv,
+        registryWithProviders({ google: "pi-key" }),
+        { currentProvider: "google" },
+      ),
+    /No Google GenAI authentication configured/,
+  );
+});
+
+test("resolveAuth: current google-vertex provider uses pi Vertex API key", async () => {
+  const { config } = normalizeConfig({ lookupPiConfig: true });
+  const auth = await resolveAuth(
+    config,
+    { GEMINI_API_KEY: "unused", GOOGLE_CLOUD_PROJECT: "project" },
+    registryWithProviders({ "google-vertex": "vertex-key" }),
+    { currentProvider: "google-vertex" },
+  );
+  assert.deepEqual(auth, {
+    backend: "vertex-ai",
+    apiKey: "vertex-key",
+    apiKeySource: "pi provider google-vertex",
+  });
+});
+
+test("resolveAuth: current google-vertex provider uses pi Vertex ADC", async () => {
+  const { config } = normalizeConfig({ lookupPiConfig: true });
+  const auth = await resolveAuth(
+    config,
+    {
+      GOOGLE_CLOUD_PROJECT: "project",
+      GOOGLE_CLOUD_LOCATION: "asia-northeast1",
+    },
+    registryWithProviders({ "google-vertex": "<authenticated>" }),
+    { currentProvider: "google-vertex" },
+  );
+  assert.deepEqual(auth, {
+    backend: "vertex-ai",
+    project: "project",
+    location: "asia-northeast1",
+    projectSource: "GOOGLE_CLOUD_PROJECT",
+    locationSource: "GOOGLE_CLOUD_LOCATION",
+  });
+});
+
+test("resolveAuth: extension apiKey wins over current Vertex provider", async () => {
+  const { config } = normalizeConfig({
+    apiKey: "extension-key",
+    lookupPiConfig: true,
+  });
+  const auth = await resolveAuth(
+    config,
+    { GOOGLE_CLOUD_PROJECT: "project" },
+    registryWithProviders({ "google-vertex": "vertex-key" }),
+    { currentProvider: "google-vertex" },
+  );
+  assert.deepEqual(auth, {
+    backend: "api-key",
+    apiKey: "extension-key",
+    source: "config apiKey",
+  });
 });
 
 test("resolveAuth: rejects interpolation-style config apiKey", async () => {
@@ -154,6 +249,32 @@ test("resolveAuth: auto-detects vertex when only a project is resolvable", async
   const { config } = normalizeConfig({});
   const auth = await resolveAuth(config, { GOOGLE_CLOUD_PROJECT: "proj" });
   assert.equal(auth.backend, "vertex-ai");
+});
+
+test("resolveAuth: auto-detects Vertex API key from pi provider", async () => {
+  const { config } = normalizeConfig({ lookupPiConfig: true });
+  const auth = await resolveAuth(
+    config,
+    emptyEnv,
+    registryWithProviders({ "google-vertex": "vertex-key" }),
+  );
+  assert.deepEqual(auth, {
+    backend: "vertex-ai",
+    apiKey: "vertex-key",
+    apiKeySource: "pi provider google-vertex",
+  });
+});
+
+test("resolveAuth: uses GOOGLE_CLOUD_API_KEY for Vertex", async () => {
+  const { config } = normalizeConfig({ lookupPiConfig: true });
+  const auth = await resolveAuth(config, {
+    GOOGLE_CLOUD_API_KEY: "cloud-key",
+  });
+  assert.deepEqual(auth, {
+    backend: "vertex-ai",
+    apiKey: "cloud-key",
+    apiKeySource: "GOOGLE_CLOUD_API_KEY",
+  });
 });
 
 test("resolveAuth: api-key wins auto-detection over project", async () => {

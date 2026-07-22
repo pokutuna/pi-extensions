@@ -84,7 +84,9 @@ export async function buildStatusMessage(
   let auth: string;
   try {
     auth = describeAuth(
-      await resolveAuth(loaded.config, process.env, ctx.modelRegistry),
+      await resolveAuth(loaded.config, process.env, ctx.modelRegistry, {
+        currentProvider: ctx.model?.provider,
+      }),
     );
   } catch (error) {
     auth = `unresolved — ${error instanceof Error ? error.message : String(error)}`;
@@ -112,9 +114,11 @@ function helpText(): string {
     "",
     "Configuration (all optional): ~/.pi/agent/google-genai.json",
     '{ "auth": "api-key" | "vertex-ai", "apiKey": "...", "project": "...",',
-    '  "location": "global", "model": "gemini-3.5-flash", "timeoutMs": 60000 }',
+    '  "location": "global", "model": "gemini-3.6-flash", "timeoutMs": 60000,',
+    '  "lookupPiConfig": false }',
     "",
     "Auth: GEMINI_API_KEY / GOOGLE_API_KEY / /login google, or Vertex AI via",
-    "`gcloud auth application-default login` + GOOGLE_CLOUD_PROJECT.",
+    "GOOGLE_CLOUD_API_KEY or `gcloud auth application-default login` +",
+    "GOOGLE_CLOUD_PROJECT.",
   ].join("\n");
 }

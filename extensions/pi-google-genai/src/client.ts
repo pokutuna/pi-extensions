@@ -28,6 +28,10 @@ export function authCacheKey(auth: ResolvedAuth): string {
     const digest = createHash("sha256").update(auth.apiKey).digest("hex");
     return `api-key\0${digest}`;
   }
+  if (auth.apiKey) {
+    const digest = createHash("sha256").update(auth.apiKey).digest("hex");
+    return `vertex-ai-api-key\0${digest}`;
+  }
   return `vertex-ai\0${auth.project}\0${auth.location}`;
 }
 
@@ -38,11 +42,13 @@ export function clientFor(auth: ResolvedAuth): GoogleGenAI {
     const client =
       auth.backend === "api-key"
         ? new GoogleGenAI({ apiKey: auth.apiKey })
-        : new GoogleGenAI({
-            vertexai: true,
-            project: auth.project,
-            location: auth.location,
-          });
+        : auth.apiKey
+          ? new GoogleGenAI({ vertexai: true, apiKey: auth.apiKey })
+          : new GoogleGenAI({
+              vertexai: true,
+              project: auth.project,
+              location: auth.location,
+            });
     memoizedClient = { key, client };
   }
   return memoizedClient.client;
@@ -58,7 +64,9 @@ export async function generateGrounded(
   signal: AbortSignal | undefined,
 ) {
   const loaded = await loadConfig();
-  const auth = await resolveAuth(loaded.config, process.env, ctx.modelRegistry);
+  const auth = await resolveAuth(loaded.config, process.env, ctx.modelRegistry, {
+    currentProvider: ctx.model?.provider,
+  });
   const client = clientFor(auth);
   const model = loaded.config.model;
   const timeoutMs = request.timeoutMs ?? loaded.config.timeoutMs;

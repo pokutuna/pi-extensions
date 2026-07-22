@@ -2,13 +2,20 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export const DEFAULT_MODEL = "gemini-3.5-flash";
+export const DEFAULT_MODEL = "gemini-3.6-flash";
 export const DEFAULT_LOCATION = "global";
 export const DEFAULT_TIMEOUT_MS = 60_000;
+export const DEFAULT_LOOKUP_PI_CONFIG = false;
 export const MAX_TIMEOUT_MS = 600_000;
 
 const CONFIG_FILE_NAME = "google-genai.json";
 const AUTH_MODES = ["api-key", "vertex-ai"] as const;
+const GOOGLE_PROVIDER = "google";
+const GOOGLE_VERTEX_PROVIDER = "google-vertex";
+const VERTEX_ADC_MARKERS = new Set([
+  "<authenticated>",
+  "gcp-vertex-credentials",
+]);
 const KNOWN_KEYS = [
   "auth",
   "apiKey",
@@ -16,6 +23,7 @@ const KNOWN_KEYS = [
   "location",
   "model",
   "timeoutMs",
+  "lookupPiConfig",
 ];
 
 export type AuthMode = (typeof AUTH_MODES)[number];
@@ -28,6 +36,7 @@ export interface GoogleGenaiConfig {
   location?: string;
   model: string;
   timeoutMs: number;
+  lookupPiConfig: boolean;
 }
 
 export interface LoadedConfig {
@@ -37,19 +46,26 @@ export interface LoadedConfig {
   configLoaded: boolean;
 }
 
-/** Minimal surface of pi's model registry used for API key fallback. */
+/** Minimal surface of pi's model registry used for authentication fallback. */
 export interface ApiKeyRegistry {
   getApiKeyForProvider(provider: string): Promise<string | undefined>;
+}
+
+export interface AuthResolutionOptions {
+  /** Provider of pi's currently selected model, when there is one. */
+  currentProvider?: string;
 }
 
 export type ResolvedAuth =
   | { backend: "api-key"; apiKey: string; source: string }
   | {
       backend: "vertex-ai";
-      project: string;
-      location: string;
-      projectSource: string;
-      locationSource: string;
+      apiKey?: string;
+      apiKeySource?: string;
+      project?: string;
+      location?: string;
+      projectSource?: string;
+      locationSource?: string;
     };
 
 type Env = Record<string, string | undefined>;
@@ -134,6 +150,11 @@ export function normalizeConfig(value: unknown): {
   const config: GoogleGenaiConfig = {
     model: normalizeString(raw.model, "model", warnings) ?? DEFAULT_MODEL,
     timeoutMs,
+    lookupPiConfig: normalizeBoolean(
+      raw.lookupPiConfig,
+      "lookupPiConfig",
+      warnings,
+    ),
   };
   if (auth) config.auth = auth;
   const apiKey = normalizeString(raw.apiKey, "apiKey", warnings);
@@ -161,30 +182,83 @@ export function isUnsupportedConfigApiKey(apiKey: string): boolean {
 /**
  * Resolve the auth backend and its credentials/settings.
  *
- * Precedence for every setting: config file > environment variables >
- * pi auth registry > default. Backend selection: config.auth >
- * GOOGLE_GENAI_USE_VERTEXAI > auto-detect (API key wins over project).
+ * Precedence for every setting: extension config > pi's current provider >
+ * environment variables / pi auth registry > defaults. Backend selection:
+ * config.auth (or config.apiKey) > GOOGLE_GENAI_USE_VERTEXAI > current pi
+ * provider > auto-detect (Gemini API key wins over Vertex AI).
  */
 export async function resolveAuth(
   config: GoogleGenaiConfig,
   env: Env = process.env,
   registry?: ApiKeyRegistry,
+  options: AuthResolutionOptions = {},
 ): Promise<ResolvedAuth> {
-  const backend =
-    config.auth ??
-    (isTruthyEnv(env.GOOGLE_GENAI_USE_VERTEXAI) ? "vertex-ai" : undefined);
+  const backend = config.auth
+    ? config.auth
+    : config.apiKey
+      ? "api-key"
+      : isTruthyEnv(env.GOOGLE_GENAI_USE_VERTEXAI)
+        ? "vertex-ai"
+        : undefined;
 
   if (backend === "api-key") {
-    return resolveApiKeyAuth(config, env, registry, true);
+    return resolveApiKeyAuth(
+      config,
+      env,
+      registry,
+      config.lookupPiConfig,
+      true,
+    );
   }
   if (backend === "vertex-ai") {
-    return resolveVertexAuth(config, env, true);
+    return resolveVertexAuth(
+      config,
+      env,
+      registry,
+      config.lookupPiConfig,
+      true,
+    );
+  }
+
+  if (config.lookupPiConfig && options.currentProvider === GOOGLE_PROVIDER) {
+    const apiKeyAuth = await resolveApiKeyAuth(
+      config,
+      env,
+      registry,
+      true,
+      false,
+    );
+    if (apiKeyAuth) return apiKeyAuth;
+  } else if (
+    config.lookupPiConfig &&
+    options.currentProvider === GOOGLE_VERTEX_PROVIDER
+  ) {
+    const vertexAuth = await resolveVertexAuth(
+      config,
+      env,
+      registry,
+      true,
+      false,
+    );
+    if (vertexAuth) return vertexAuth;
   }
 
   // Auto-detect: prefer an API key when one is resolvable, else Vertex AI.
-  const apiKeyAuth = await resolveApiKeyAuth(config, env, registry, false);
+  const apiKeyAuth = await resolveApiKeyAuth(
+    config,
+    env,
+    registry,
+    config.lookupPiConfig,
+    false,
+  );
   if (apiKeyAuth) return apiKeyAuth;
-  const vertexAuth = resolveVertexAuth(config, env, false);
+  const vertexAuth = await resolveVertexAuth(
+    config,
+    env,
+    registry,
+    config.lookupPiConfig,
+    false,
+  );
   if (vertexAuth) return vertexAuth;
 
   throw new Error(
@@ -193,7 +267,7 @@ export async function resolveAuth(
       "- set the GEMINI_API_KEY (or GOOGLE_API_KEY) environment variable",
       "- run /login google in pi",
       `- set "apiKey" in ${configPath(env)}`,
-      "- for Vertex AI: run `gcloud auth application-default login` and set",
+      "- for Vertex AI: set GOOGLE_CLOUD_API_KEY, or run `gcloud auth application-default login` and set",
       `  GOOGLE_CLOUD_PROJECT (or "project" in ${configPath(env)})`,
     ].join("\n"),
   );
@@ -203,18 +277,21 @@ async function resolveApiKeyAuth(
   config: GoogleGenaiConfig,
   env: Env,
   registry: ApiKeyRegistry | undefined,
+  lookupPiConfig: boolean,
   required: true,
 ): Promise<ResolvedAuth>;
 async function resolveApiKeyAuth(
   config: GoogleGenaiConfig,
   env: Env,
   registry: ApiKeyRegistry | undefined,
+  lookupPiConfig: boolean,
   required: false,
 ): Promise<ResolvedAuth | undefined>;
 async function resolveApiKeyAuth(
   config: GoogleGenaiConfig,
   env: Env,
   registry: ApiKeyRegistry | undefined,
+  lookupPiConfig: boolean,
   required: boolean,
 ): Promise<ResolvedAuth | undefined> {
   if (config.apiKey) {
@@ -228,6 +305,16 @@ async function resolveApiKeyAuth(
       backend: "api-key",
       apiKey: config.apiKey,
       source: "config apiKey",
+    };
+  }
+  const registryKey = lookupPiConfig
+    ? await registry?.getApiKeyForProvider(GOOGLE_PROVIDER)
+    : undefined;
+  if (registryKey) {
+    return {
+      backend: "api-key",
+      apiKey: registryKey,
+      source: "pi provider google",
     };
   }
   if (env.GEMINI_API_KEY) {
@@ -244,14 +331,6 @@ async function resolveApiKeyAuth(
       source: "GOOGLE_API_KEY",
     };
   }
-  const registryKey = await registry?.getApiKeyForProvider("google");
-  if (registryKey) {
-    return {
-      backend: "api-key",
-      apiKey: registryKey,
-      source: "pi auth (/login google)",
-    };
-  }
   if (!required) return undefined;
   throw new Error(
     "Google GenAI is set to the api-key backend but no API key was found. " +
@@ -262,19 +341,41 @@ async function resolveApiKeyAuth(
 function resolveVertexAuth(
   config: GoogleGenaiConfig,
   env: Env,
+  registry: ApiKeyRegistry | undefined,
+  lookupPiConfig: boolean,
   required: true,
-): ResolvedAuth;
+): Promise<ResolvedAuth>;
 function resolveVertexAuth(
   config: GoogleGenaiConfig,
   env: Env,
+  registry: ApiKeyRegistry | undefined,
+  lookupPiConfig: boolean,
   required: false,
-): ResolvedAuth | undefined;
-function resolveVertexAuth(
+): Promise<ResolvedAuth | undefined>;
+async function resolveVertexAuth(
   config: GoogleGenaiConfig,
   env: Env,
+  registry: ApiKeyRegistry | undefined,
+  lookupPiConfig: boolean,
   required: boolean,
-): ResolvedAuth | undefined {
-  const project = config.project ?? env.GOOGLE_CLOUD_PROJECT;
+): Promise<ResolvedAuth | undefined> {
+  const registryKey = lookupPiConfig
+    ? await registry?.getApiKeyForProvider(GOOGLE_VERTEX_PROVIDER)
+    : undefined;
+  const vertexApiKey = lookupPiConfig
+    ? resolveVertexApiKey(registryKey, "pi provider google-vertex") ??
+      resolveVertexApiKey(env.GOOGLE_CLOUD_API_KEY, "GOOGLE_CLOUD_API_KEY")
+    : undefined;
+  if (vertexApiKey) {
+    return {
+      backend: "vertex-ai",
+      apiKey: vertexApiKey.apiKey,
+      apiKeySource: vertexApiKey.source,
+    };
+  }
+
+  const project =
+    config.project ?? env.GOOGLE_CLOUD_PROJECT ?? env.GCLOUD_PROJECT;
   if (!project) {
     if (!required) return undefined;
     throw new Error(
@@ -285,7 +386,9 @@ function resolveVertexAuth(
   }
   const projectSource = config.project
     ? "config project"
-    : "GOOGLE_CLOUD_PROJECT";
+    : env.GOOGLE_CLOUD_PROJECT
+      ? "GOOGLE_CLOUD_PROJECT"
+      : "GCLOUD_PROJECT";
   const location =
     config.location ?? env.GOOGLE_CLOUD_LOCATION ?? DEFAULT_LOCATION;
   const locationSource = config.location
@@ -306,7 +409,21 @@ export function describeAuth(auth: ResolvedAuth): string {
   if (auth.backend === "api-key") {
     return `api-key (key from ${auth.source})`;
   }
+  if (auth.apiKey) {
+    return `vertex-ai (key from ${auth.apiKeySource ?? "Vertex AI provider"})`;
+  }
   return `vertex-ai (project: ${auth.project} from ${auth.projectSource}, location: ${auth.location} from ${auth.locationSource}, credentials: ADC)`;
+}
+
+function resolveVertexApiKey(
+  value: string | undefined,
+  source: string,
+): { apiKey: string; source: string } | undefined {
+  if (!value || VERTEX_ADC_MARKERS.has(value)) return undefined;
+  return {
+    apiKey: value,
+    source,
+  };
 }
 
 function isTruthyEnv(value: string | undefined): boolean {
@@ -326,6 +443,17 @@ function normalizeString(
     `${CONFIG_FILE_NAME}: ${field} must be a non-empty string; ignoring value.`,
   );
   return undefined;
+}
+
+function normalizeBoolean(
+  value: unknown,
+  field: string,
+  warnings: string[],
+): boolean {
+  if (value === undefined) return DEFAULT_LOOKUP_PI_CONFIG;
+  if (typeof value === "boolean") return value;
+  warnings.push(`${CONFIG_FILE_NAME}: ${field} must be a boolean; ignoring value.`);
+  return DEFAULT_LOOKUP_PI_CONFIG;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

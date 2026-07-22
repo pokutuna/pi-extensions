@@ -10,8 +10,8 @@ A [pi](https://pi.dev) extension that exposes Google GenAI grounding capabilitie
   `deep_research` for agentic multi-step research.
 - Support **both** authentication backends of Google GenAI:
   - **Gemini Developer API** with an API key.
-  - **Vertex AI** with Application Default Credentials (ADC).
-- Default model: `gemini-3.5-flash`, overridable via config.
+  - **Vertex AI** with an API key or Application Default Credentials (ADC).
+- Default model: `gemini-3.6-flash`, overridable via config.
 - Format responses with structured source citations extracted from grounding
   metadata, truncated safely for the agent context.
 
@@ -152,8 +152,11 @@ $PI_CODING_AGENT_DIR/google-genai.json   (default: ~/.pi/agent/google-genai.json
   "project": "my-gcp-project",
   "location": "global",
 
-  "model": "gemini-3.5-flash",
+  "model": "gemini-3.6-flash",
   "timeoutMs": 60000,
+
+  // Opt in to pi's current provider and auth registry.
+  "lookupPiConfig": false,
 }
 ```
 
@@ -165,7 +168,7 @@ never hard failures at load time.
 
 | Setting     | Default            |
 | ----------- | ------------------ |
-| `model`     | `gemini-3.5-flash` |
+| `model`     | `gemini-3.6-flash` |
 | `location`  | `global`           |
 | `timeoutMs` | `60000`            |
 
@@ -175,15 +178,20 @@ minutes) — a bound on what a single grounded call can plausibly need, not on
 
 ### Resolution precedence
 
-For every setting: **config file > environment variables > pi auth registry >
-default**. The environment variables honored are the ones the SDK ecosystem
-already uses:
+By default, the extension uses its own config and the environment variables it
+documents. Set `lookupPiConfig: true` to also inspect pi's current Google
+provider and auth registry. With that option enabled, the precedence is
+**extension config > pi's current Google provider > pi authentication /
+environment variables > defaults**. If the current pi model is not a Google
+model, authentication is auto-detected. The environment variables honored are
+the ones the SDK ecosystem already uses:
 
 | Variable                    | Meaning                                 |
 | --------------------------- | --------------------------------------- |
 | `GOOGLE_GENAI_USE_VERTEXAI` | Truthy → select the `vertex-ai` backend |
 | `GEMINI_API_KEY`            | API key                                 |
 | `GOOGLE_API_KEY`            | API key (lower precedence than above)   |
+| `GOOGLE_CLOUD_API_KEY`      | Vertex AI API key                       |
 | `GOOGLE_CLOUD_PROJECT`      | Vertex AI project                       |
 | `GOOGLE_CLOUD_LOCATION`     | Vertex AI location                      |
 
@@ -198,19 +206,27 @@ backend is keyed by a SHA-256 digest, so the memo entry holds no key material):
 
 1. **Backend selection**
    1. `config.auth` if set.
-   2. `GOOGLE_GENAI_USE_VERTEXAI` truthy → `vertex-ai`.
-   3. Auto-detect: if an API key is resolvable → `api-key`;
-      else if a project is resolvable → `vertex-ai`;
-      else fail with a message listing every way to configure auth.
+   2. `config.apiKey` if set → `api-key`.
+   3. `GOOGLE_GENAI_USE_VERTEXAI` truthy → `vertex-ai`.
+   4. If `config.lookupPiConfig` is true, the current pi model's provider:
+      `google` → `api-key`, `google-vertex` → `vertex-ai`, when that provider
+      has usable auth.
+   5. Auto-detect: if a Google API key is resolvable → `api-key`; else if a
+      Vertex API key or project is resolvable → `vertex-ai`; else fail with a
+      message listing every way to configure auth.
 2. **`api-key` backend** — resolve the key from, in order:
-   `config.apiKey` → `GEMINI_API_KEY` → `GOOGLE_API_KEY` →
-   pi's provider auth (`ctx.modelRegistry.getApiKeyForProvider("google")`,
-   i.e. `/login google`). Client: `new GoogleGenAI({ apiKey })`.
-3. **`vertex-ai` backend** — resolve `project` (config →
-   `GOOGLE_CLOUD_PROJECT`; required) and `location` (config →
-   `GOOGLE_CLOUD_LOCATION` → `"global"`). Client:
-   `new GoogleGenAI({ vertexai: true, project, location })`.
-   Credentials come from ADC; the extension never touches key material.
+   `config.apiKey` →, when `config.lookupPiConfig` is true, pi's `google`
+   provider auth (`ctx.modelRegistry.getApiKeyForProvider("google")`, including
+   `/login google`) → `GEMINI_API_KEY` → `GOOGLE_API_KEY`. Client: `new
+   GoogleGenAI({ apiKey })`.
+3. **`vertex-ai` backend** — resolve a Vertex API key from pi's
+   `google-vertex` provider and `GOOGLE_CLOUD_API_KEY` only when
+   `config.lookupPiConfig` is true. Otherwise resolve `project` (config →
+   `GOOGLE_CLOUD_PROJECT` → `GCLOUD_PROJECT`; required for ADC) and `location`
+   (config → `GOOGLE_CLOUD_LOCATION` → `"global"`). A Vertex API key client is
+   created as `new GoogleGenAI({ vertexai: true, apiKey })`; ADC uses
+   `new GoogleGenAI({ vertexai: true, project, location })`. The extension
+   never touches credential key material.
 
 Auth errors thrown from `execute()` are returned to the model as tool errors
 with actionable guidance (which env var / config field / `gcloud` command to

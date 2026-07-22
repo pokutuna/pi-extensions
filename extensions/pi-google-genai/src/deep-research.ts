@@ -198,7 +198,9 @@ function errorMessage(error: unknown): string {
 
 async function deepResearchClient(ctx: ExtensionContext) {
   const loaded = await loadConfig();
-  const auth = await resolveAuth(loaded.config, process.env, ctx.modelRegistry);
+  const auth = await resolveAuth(loaded.config, process.env, ctx.modelRegistry, {
+    currentProvider: ctx.model?.provider,
+  });
   if (auth.backend !== "vertex-ai") {
     throw new Error(
       "deep_research requires the vertex-ai auth backend. " +
