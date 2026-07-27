@@ -184,8 +184,8 @@ export function isUnsupportedConfigApiKey(apiKey: string): boolean {
  *
  * Precedence for every setting: extension config > pi's current provider >
  * environment variables / pi auth registry > defaults. Backend selection:
- * config.auth (or config.apiKey) > GOOGLE_GENAI_USE_VERTEXAI > current pi
- * provider > auto-detect (Gemini API key wins over Vertex AI).
+ * config.auth (or config.apiKey) > GOOGLE_GENAI_USE_VERTEXAI > a current
+ * google-vertex provider > auto-detect (Gemini API key wins over Vertex AI).
  */
 export async function resolveAuth(
   config: GoogleGenaiConfig,
@@ -220,16 +220,10 @@ export async function resolveAuth(
     );
   }
 
-  if (config.lookupPiConfig && options.currentProvider === GOOGLE_PROVIDER) {
-    const apiKeyAuth = await resolveApiKeyAuth(
-      config,
-      env,
-      registry,
-      true,
-      false,
-    );
-    if (apiKeyAuth) return apiKeyAuth;
-  } else if (
+  // A current `google` provider needs no special case: auto-detect already
+  // resolves its API key first. `google-vertex` does, because it has to win
+  // over the Gemini API key that auto-detect would otherwise prefer.
+  if (
     config.lookupPiConfig &&
     options.currentProvider === GOOGLE_VERTEX_PROVIDER
   ) {
@@ -363,8 +357,8 @@ async function resolveVertexAuth(
     ? await registry?.getApiKeyForProvider(GOOGLE_VERTEX_PROVIDER)
     : undefined;
   const vertexApiKey = lookupPiConfig
-    ? resolveVertexApiKey(registryKey, "pi provider google-vertex") ??
-      resolveVertexApiKey(env.GOOGLE_CLOUD_API_KEY, "GOOGLE_CLOUD_API_KEY")
+    ? (resolveVertexApiKey(registryKey, "pi provider google-vertex") ??
+      resolveVertexApiKey(env.GOOGLE_CLOUD_API_KEY, "GOOGLE_CLOUD_API_KEY"))
     : undefined;
   if (vertexApiKey) {
     return {
@@ -452,7 +446,9 @@ function normalizeBoolean(
 ): boolean {
   if (value === undefined) return DEFAULT_LOOKUP_PI_CONFIG;
   if (typeof value === "boolean") return value;
-  warnings.push(`${CONFIG_FILE_NAME}: ${field} must be a boolean; ignoring value.`);
+  warnings.push(
+    `${CONFIG_FILE_NAME}: ${field} must be a boolean; ignoring value.`,
+  );
   return DEFAULT_LOOKUP_PI_CONFIG;
 }
 

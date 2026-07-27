@@ -16,6 +16,17 @@ interface GroundedRequest {
   timeoutAdvice?: string;
 }
 
+/**
+ * Extra head room given to the SDK's own deadline so our AbortController is
+ * always the one that fires first. `httpOptions.timeout` is sent as a
+ * server-side deadline, and measured against Vertex it comes back ~90ms
+ * *before* a local timer set to the same value — leaving `isTimeout()` false
+ * and turning what is really a timeout into a bare `HTTP 504
+ * DEADLINE_EXCEEDED`. The SDK deadline stays as a backstop for a response that
+ * never arrives at all.
+ */
+const SDK_TIMEOUT_GRACE_MS = 5_000;
+
 let memoizedClient: { key: string; client: GoogleGenAI } | undefined;
 
 /**
@@ -64,9 +75,14 @@ export async function generateGrounded(
   signal: AbortSignal | undefined,
 ) {
   const loaded = await loadConfig();
-  const auth = await resolveAuth(loaded.config, process.env, ctx.modelRegistry, {
-    currentProvider: ctx.model?.provider,
-  });
+  const auth = await resolveAuth(
+    loaded.config,
+    process.env,
+    ctx.modelRegistry,
+    {
+      currentProvider: ctx.model?.provider,
+    },
+  );
   const client = clientFor(auth);
   const model = loaded.config.model;
   const timeoutMs = request.timeoutMs ?? loaded.config.timeoutMs;
@@ -79,7 +95,7 @@ export async function generateGrounded(
         tools: request.tools,
         ...(request.toolConfig ? { toolConfig: request.toolConfig } : {}),
         abortSignal: timeoutSignal.signal,
-        httpOptions: { timeout: timeoutMs },
+        httpOptions: { timeout: timeoutMs + SDK_TIMEOUT_GRACE_MS },
       },
     });
     return await formatToolResult(response, model);
@@ -106,12 +122,18 @@ export function formatTimeoutError(
   ].join(" ");
 }
 
-function toApiError(error: unknown): unknown {
+/**
+ * Normalize an SDK error into one message shape. Shared with deep-research so
+ * every tool reports API failures the same way.
+ */
+export function toApiError(error: unknown): unknown {
   if (error instanceof Error) {
     const status = (error as unknown as { status?: unknown }).status;
     if (typeof status === "number") {
+      // Some SDK error classes already lead with the status; don't repeat it.
+      const message = error.message.replace(new RegExp(`^${status}\\s+`), "");
       return new Error(
-        `Google GenAI request failed (HTTP ${status}): ${error.message}`,
+        `Google GenAI request failed (HTTP ${status}): ${message}`,
       );
     }
   }

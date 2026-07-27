@@ -125,8 +125,38 @@ no single tool call can block for that long. Instead:
   then wait for the announced message rather than repeatedly calling
   `deep_research` to poll — polling via tool calls would cost many round
   trips for a job that runs for minutes.
-- The final answer is extracted from the last `model_output` step's text
-  content in the completed interaction's `steps` array.
+- **Reassembling the report**: a report that embeds a chart arrives split
+  across consecutive `model_output` steps — text, image, text — so the last
+  step's text is only its tail. Taking that alone silently dropped the report's
+  opening (1295 of 6259 bytes on a measured run). The citation offsets say
+  where the report starts, so `assembleReport` prepends preceding text parts,
+  concatenated verbatim, until the annotated byte range fits.
+- **Citations**: the answer keeps the `[cite: 4, 7, 8]` markers the agent
+  wrote, and every citation is listed after it as `[N] title — url` **under the
+  agent's own numbering**, so a marker in the prose points at a line in the
+  list. The list is uncapped, unlike the grounded tools' `Sources:` section: a
+  research report's value is largely in its sources.
+- **How the numbers are recovered**: each annotation's
+  `start_index`/`end_index` are *byte* offsets of the `[cite: …]` marker it
+  belongs to, and a marker carrying three numbers carries three annotations
+  over that same span, in the numbers' order. Slicing the marker out and
+  zipping its numbers with its annotations gives number → page.
+  - The offsets are measured against the **whole report**, not against the
+    single part they hang off — which is why the reassembly above has to happen
+    first. The docs say "the individual text content block", which holds only
+    when the report is one part.
+  - Verified on two real runs: 33/33 and 15/15 spans land exactly on a marker,
+    marker-number count matches annotation count everywhere, and numbers
+    1..41 / 1..9 each resolve to exactly one page with no number claimed twice.
+  - A few annotations arrive with no offsets at all (3 of 100 on the long run).
+    They are extras beside the located ones and are skipped.
+  - The resolution verifies itself — every span must slice to a `[cite: …]`
+    marker whose number count matches its annotations — and falls back to
+    listing the pages under the list's own numbering if anything disagrees.
+    The fallback deduplicates by title, not URL: a page is annotated once per
+    citation, each time with a different single-use
+    `vertexaisearch.cloud.google.com/grounding-api-redirect/…` URL, and the
+    title is what stays stable.
 - `deep_research` requires the `vertex-ai` auth backend and throws an
   actionable error otherwise; it was empirically confirmed to work against
   Vertex AI with ADC (the public docs do not call out Vertex AI support
@@ -181,10 +211,9 @@ minutes) — a bound on what a single grounded call can plausibly need, not on
 By default, the extension uses its own config and the environment variables it
 documents. Set `lookupPiConfig: true` to also inspect pi's current Google
 provider and auth registry. With that option enabled, the precedence is
-**extension config > pi's current Google provider > pi authentication /
-environment variables > defaults**. If the current pi model is not a Google
-model, authentication is auto-detected. The environment variables honored are
-the ones the SDK ecosystem already uses:
+**extension config > a current `google-vertex` provider > pi authentication /
+environment variables > defaults**. Otherwise authentication is auto-detected.
+The environment variables honored are the ones the SDK ecosystem already uses:
 
 | Variable                    | Meaning                                 |
 | --------------------------- | --------------------------------------- |
@@ -208,9 +237,10 @@ backend is keyed by a SHA-256 digest, so the memo entry holds no key material):
    1. `config.auth` if set.
    2. `config.apiKey` if set → `api-key`.
    3. `GOOGLE_GENAI_USE_VERTEXAI` truthy → `vertex-ai`.
-   4. If `config.lookupPiConfig` is true, the current pi model's provider:
-      `google` → `api-key`, `google-vertex` → `vertex-ai`, when that provider
-      has usable auth.
+   4. If `config.lookupPiConfig` is true and the current pi model's provider is
+      `google-vertex` → `vertex-ai`, when that provider has usable auth. A
+      current `google` provider needs no case of its own: auto-detect below
+      resolves its API key first anyway.
    5. Auto-detect: if a Google API key is resolvable → `api-key`; else if a
       Vertex API key or project is resolvable → `vertex-ai`; else fail with a
       message listing every way to configure auth.
@@ -244,10 +274,16 @@ tool execute()
 ```
 
 - **Timeout**: per-call `timeoutMs` param > config `timeoutMs` > 60s default.
-  Passed both as `httpOptions.timeout` and enforced with an `AbortSignal`
-  combined with pi's cancellation signal, so user cancellation always wins.
-  Timeout errors say explicitly that they are timeouts (not empty results) and
-  suggest narrowing the query before raising the timeout.
+  Enforced with an `AbortSignal` combined with pi's cancellation signal, so
+  user cancellation always wins. It is also passed as `httpOptions.timeout`,
+  but with `SDK_TIMEOUT_GRACE_MS` (5s) added: that value is sent as a
+  *server-side* deadline, and measured against Vertex it comes back ~90ms
+  before a local timer set to the same value — which would leave `isTimeout()`
+  false and surface a bare `HTTP 504 DEADLINE_EXCEEDED` instead of the timeout
+  message. The grace makes the local timer always fire first, keeping the SDK
+  deadline as a backstop for a response that never arrives at all. Timeout
+  errors say explicitly that they are timeouts (not empty results) and suggest
+  narrowing the query before raising the timeout.
 - **Status**: `ctx.ui.setStatus("google-genai", ...)` while a call is in
   flight, cleared in `finally`.
 
@@ -309,7 +345,11 @@ by the pi runtime at load time). Tests run on Node's built-in test runner
 
 - Config problems are warnings, not failures; tools still run with defaults.
 - Missing/invalid auth throws from `execute()` with setup instructions.
-- SDK/API errors are rethrown with the HTTP status and the API's error message.
+- SDK/API errors are rethrown with the HTTP status and the API's error
+  message. `toApiError()` in `client.ts` is the single place that shapes them,
+  and every `interactions` call in `deep-research.ts` goes through it too, so a
+  failed research run reads like the grounded tools' failures instead of
+  leaking whatever error class the SDK threw.
 - `execute()` may throw freely — pi converts throws into `isError` tool
   results without breaking the agent loop.
 

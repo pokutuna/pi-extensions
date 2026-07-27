@@ -3,6 +3,7 @@ import { afterEach, mock, test } from "node:test";
 import {
   activePollCount,
   cancelBackgroundPolls,
+  citationSection,
   MAX_CONSECUTIVE_ERRORS,
   MAX_POLL_DURATION_MS,
   POLL_INTERVAL_MS,
@@ -158,4 +159,194 @@ test("cancelBackgroundPolls: stops in-flight polls and sends nothing", async () 
   await tick(5);
   assert.equal(calls, before, "no further fetches after cancel");
   assert.equal(sent.length, 0);
+});
+
+/**
+ * Annotations as the API returns them: one per citation, all the ones a single
+ * `[cite: ...]` marker carries sharing that marker's byte offsets, in the same
+ * order as the numbers inside it.
+ */
+function cite(
+  report: string,
+  marker: string,
+  sources: { url: string; title?: string }[],
+) {
+  const start = Buffer.byteLength(report.slice(0, report.indexOf(marker)));
+  return sources.map((source) => ({
+    type: "url_citation",
+    start_index: start,
+    end_index: start + Buffer.byteLength(marker),
+    ...source,
+  }));
+}
+
+test("citationSection: numbers entries with the agent's own [cite: N] numbers", () => {
+  const report = "Node 24 ships V8 13.6 [cite: 3, 1]. It is LTS [cite: 2].";
+  const section = citationSection(report, [
+    ...cite(report, "[cite: 3, 1]", [
+      { url: "https://redirect/three", title: "A blog post" },
+      { url: "https://redirect/one", title: "Release notes" },
+    ]),
+    ...cite(report, "[cite: 2]", [
+      { url: "https://redirect/two", title: "An announcement" },
+    ]),
+  ]);
+
+  assert.equal(
+    section,
+    [
+      "Sources:",
+      "",
+      "- [1] Release notes — https://redirect/one",
+      "- [2] An announcement — https://redirect/two",
+      "- [3] A blog post — https://redirect/three",
+    ].join("\n"),
+  );
+});
+
+test("citationSection: an annotation with no offsets does not sink the rest", () => {
+  const report = "An answer [cite: 1].";
+  const section = citationSection(report, [
+    ...cite(report, "[cite: 1]", [
+      { url: "https://redirect/one", title: "Release notes" },
+    ]),
+    { type: "url_citation", url: "https://redirect/stray", title: "A stray" },
+  ]);
+
+  assert.equal(
+    section,
+    "Sources:\n\n- [1] Release notes — https://redirect/one",
+  );
+});
+
+test("citationSection: offsets are bytes, not characters", () => {
+  const report = "日本語の本文です [cite: 1].";
+  const section = citationSection(report, [
+    ...cite(report, "[cite: 1]", [{ url: "https://example.com/ja" }]),
+  ]);
+
+  assert.equal(section, "Sources:\n\n- [1] https://example.com/ja");
+});
+
+test("citationSection: falls back to its own numbering when offsets do not resolve", () => {
+  const report = "An answer with markers [cite: 1, 2].";
+  const section = citationSection(report, [
+    // Offsets pointing at prose rather than at the marker: unusable.
+    {
+      type: "url_citation",
+      url: "https://redirect/one",
+      title: "Release notes",
+      start_index: 0,
+      end_index: 10,
+    },
+    {
+      type: "url_citation",
+      url: "https://redirect/two",
+      title: "A blog post",
+      start_index: 0,
+      end_index: 10,
+    },
+    // The same page again, under a fresh single-use redirect URL.
+    {
+      type: "url_citation",
+      url: "https://redirect/one-again",
+      title: "Release notes",
+      start_index: 0,
+      end_index: 10,
+    },
+  ]);
+
+  assert.equal(
+    section,
+    [
+      "Sources:",
+      "",
+      "- [1] Release notes — https://redirect/one",
+      "- [2] A blog post — https://redirect/two",
+    ].join("\n"),
+  );
+});
+
+test("citationSection: annotations without a usable URL are ignored", () => {
+  const section = citationSection("Nothing usable [cite: 2].", [
+    { type: "url_citation", url: "" },
+    { type: "file_citation", url: "https://redirect/other-kind" },
+  ]);
+
+  assert.equal(section, "");
+});
+
+test("watchInteraction: the announced answer carries the source list", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { sent, pi } = fakePi();
+  const text = "An answer [cite: 1].";
+  const fetch = async (): Promise<InteractionLike> => ({
+    id: "i-6",
+    status: "completed",
+    steps: [
+      {
+        type: "model_output",
+        content: [
+          {
+            type: "text",
+            text,
+            annotations: cite(text, "[cite: 1]", [
+              { url: "https://example.com/source", title: "A source" },
+            ]),
+          },
+        ],
+      },
+    ],
+  });
+
+  watchInteraction("i-6", pi, fetch);
+  await tick(1);
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].content, /An answer \[cite: 1\]\./);
+  assert.match(
+    sent[0].content,
+    /Sources:\n\n- \[1\] A source — https:\/\/example\.com\/source/,
+  );
+});
+
+test("watchInteraction: a report split by an embedded chart is announced whole", async () => {
+  mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const { sent, pi } = fakePi();
+  const head = "Opening paragraph.\n\n";
+  const tail = "Closing paragraph [cite: 1].";
+  const fetch = async (): Promise<InteractionLike> => ({
+    id: "i-7",
+    status: "completed",
+    steps: [
+      // An earlier, unrelated output: not part of the report.
+      { type: "model_output", content: [{ type: "text", text: "A plan." }] },
+      { type: "model_output", content: [{ type: "text", text: head }] },
+      { type: "model_output", content: [{ type: "image" }] },
+      {
+        type: "model_output",
+        content: [
+          {
+            type: "text",
+            text: tail,
+            annotations: cite(head + tail, "[cite: 1]", [
+              { url: "https://example.com/chart", title: "A source" },
+            ]),
+          },
+        ],
+      },
+    ],
+  });
+
+  watchInteraction("i-7", pi, fetch);
+  await tick(1);
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].content, /Opening paragraph\./, "the head was dropped");
+  assert.match(sent[0].content, /Closing paragraph/);
+  assert.doesNotMatch(sent[0].content, /A plan\./, "earlier output crept in");
+  assert.match(
+    sent[0].content,
+    /Sources:\n\n- \[1\] A source — https:\/\/example\.com\/chart/,
+  );
 });

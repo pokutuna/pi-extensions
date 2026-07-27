@@ -21,7 +21,10 @@ session-scoped temp file.
 
 `deep_research` starts Gemini's Deep Research agent and returns an
 `interactionId`; it typically takes several minutes to finish. Use the ID
-without `query` to check its status. It is available only with Vertex AI.
+without `query` to check its status. It is available only with Vertex AI. Its
+answer keeps the agent's own `[cite: N]` markers and ends with a `Sources:`
+list of every page it cited, as `[N] title — url` under those same numbers — so
+`[cite: 6]` in the text points at `[6]` in the list.
 
 Default model: `gemini-3.6-flash`; Vertex AI location defaults to `global`.
 
@@ -89,12 +92,11 @@ To enable lookup of pi's Google configuration, use:
 settings and environment variables. Set it to `true` to use pi's current
 Google provider and credentials:
 
-- current provider `google` uses pi's Google API key;
 - current provider `google-vertex` uses Vertex AI;
 - pi's `google` / `google-vertex` credentials, including
   `GOOGLE_CLOUD_API_KEY`, are used when available;
-- if no Google provider is active, Gemini API authentication is preferred over
-  Vertex AI authentication.
+- otherwise Gemini API authentication is preferred over Vertex AI
+  authentication (so a current `google` provider resolves to its API key too).
 
 Explicit settings in `google-genai.json` still take precedence.
 
