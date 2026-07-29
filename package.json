@@ -16,10 +16,10 @@
     "check": "npm run lint && npm run build && npm run typecheck && npm test"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@earendil-works/pi-coding-agent": "^0.82.0",
     "@types/node": "^24.0.0",
-    "oxfmt": "^0.59.0",
-    "oxlint": "^1.74.0",
+    "oxfmt": "^0.60.0",
+    "oxlint": "^1.75.0",
     "typescript": "^6.0.3"
   }
 }
