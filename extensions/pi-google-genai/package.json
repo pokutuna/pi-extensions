@@ -34,7 +34,7 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@google/genai": "^2.11.0"
+    "@google/genai": "^2.18.0"
   },
   "peerDependencies": {
     "typebox": "*"
