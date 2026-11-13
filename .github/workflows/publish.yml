@@ -43,7 +43,7 @@ jobs:
       contents: write # for GitHub Release
       id-token: write # for npm Trusted Publisher OIDC
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Parse tag into package directory and version
         id: parse
@@ -87,7 +87,7 @@ jobs:
           fi
           echo "Found CHANGELOG entry for version ${{ steps.parse.outputs.version }}"
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
